@@ -1,113 +1,94 @@
-// ---------------------------------------------------------
-// IMPORTS
-// ---------------------------------------------------------
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const admin = require("firebase-admin");
-const path = require("path");
 
-// ---------------------------------------------------------
-// FIREBASE INIT
-// ---------------------------------------------------------
 const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_KEY);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://chatapp-b5d7d-default-rtdb.asia-southeast1.firebasedatabase.app" // Your Firebase URL
+  databaseURL: "https://chatapp-b5d7d-default-rtdb.asia-southeast1.firebasedatabase.app"
 });
 
 const db = admin.database();
 
-// ---------------------------------------------------------
-// EXPRESS + SOCKET.IO SETUP
-// ---------------------------------------------------------
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-// Serve static files from "public" folder
-app.use(express.static(path.join(__dirname, "public")));
-
-// Root route for testing
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html")); // Make sure public/index.html exists
-});
+app.use(express.static("public"));
 
 const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
 
-const io = new Server(server, {
-  cors: {
-    origin: "*",
-  },
-});
+// Keep track of online users
+let onlineUsers = {};
 
-// ---------------------------------------------------------
-// SOCKET.IO EVENTS
-// ---------------------------------------------------------
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
+  let username = null;
 
-  let userId = null;
+  // -------- LOGIN --------
+  socket.on("login", async ({ username: name, password, auto }) => {
+    // For now, simple "any password" login
+    if (!name) return socket.emit("loginFailed", "Username required");
 
-  // -----------------------------------------------------
-  // USER ONLINE
-  // -----------------------------------------------------
-  socket.on("user_online", (uid) => {
-    userId = uid;
-    const ref = db.ref(`status/${userId}`);
+    username = name;
+    onlineUsers[username] = { socketId: socket.id, online: true, lastSeen: new Date().toISOString() };
+    
+    // Send success + list of online users + all messages
+    const messagesSnap = await db.ref("messages").once("value");
+    const messages = messagesSnap.val() ? Object.values(messagesSnap.val()) : [];
+    
+    socket.emit("loginSuccess", { username, users: onlineUsers, messages });
 
-    // Mark ONLINE
-    ref.set({
-      state: "online",
-      last_changed: admin.database.ServerValue.TIMESTAMP
-    });
-
-    // Auto OFFLINE when disconnect
-    ref.onDisconnect().set({
-      state: "offline",
-      last_changed: admin.database.ServerValue.TIMESTAMP
-    });
-
-    console.log(`${userId} is online`);
+    // Broadcast user status update
+    io.emit("userUpdate", onlineUsers);
   });
 
-  // -----------------------------------------------------
-  // RECEIVE AND STORE MESSAGE
-  // -----------------------------------------------------
-  socket.on("send_message", async (msg) => {
-    const newMsg = {
-      ...msg,
-      timestamp: admin.database.ServerValue.TIMESTAMP
-    };
+  // -------- LOGOUT --------
+  socket.on("logout", () => {
+    if (!username) return;
+    onlineUsers[username].online = false;
+    onlineUsers[username].lastSeen = new Date().toISOString();
+    io.emit("userUpdate", onlineUsers);
+  });
 
+  // -------- CHAT MESSAGE --------
+  socket.on("chat message", async (msg) => {
     const messageRef = db.ref("messages").push();
-    await messageRef.set(newMsg);
-
-    io.emit("new_message", { id: messageRef.key, ...newMsg });
+    await messageRef.set(msg);
+    io.emit("chat message", msg);
   });
 
-  // -----------------------------------------------------
-  // USER DISCONNECT
-  // -----------------------------------------------------
+  // -------- TYPING --------
+  socket.on("typing", ({ from }) => {
+    socket.broadcast.emit("typing", { from });
+  });
+
+  // -------- MESSAGE SEEN --------
+  socket.on("messageSeen", (data) => {
+    socket.broadcast.emit("messageSeen", data);
+  });
+
+  // -------- DELETE MESSAGE --------
+  socket.on("deleteMessage", (data) => {
+    socket.broadcast.emit("deleteMessage", data);
+  });
+
+  // -------- LOCATION --------
+  socket.on("locationUpdate", (loc) => {
+    socket.broadcast.emit("locationUpdate", loc);
+  });
+
   socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
-
-    if (userId) {
-      const ref = db.ref(`status/${userId}`);
-      ref.set({
-        state: "offline",
-        last_changed: admin.database.ServerValue.TIMESTAMP
-      });
-    }
+    if (!username) return;
+    onlineUsers[username].online = false;
+    onlineUsers[username].lastSeen = new Date().toISOString();
+    io.emit("userUpdate", onlineUsers);
+    console.log("User disconnected:", username);
   });
 });
 
-// ---------------------------------------------------------
-// START SERVER
-// ---------------------------------------------------------
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
