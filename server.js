@@ -10,10 +10,12 @@ const admin = require("firebase-admin");
 // ---------------------------------------------------------
 // FIREBASE INIT
 // ---------------------------------------------------------
-const serviceAccount = require("./serviceAccountKey.json");
+const admin = require("firebase-admin");
+
+const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_KEY);
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
+  credential: admin.credential.cert(serviceAccount)
   databaseURL: "https://chatapp-b5d7d-default-rtdb.asia-southeast1.firebasedatabase.app"  // <-- Paste your URL
 });
 
