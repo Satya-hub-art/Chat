@@ -1,6 +1,7 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8">
   <title>Live Chat</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
@@ -61,8 +62,7 @@
     <button>Send</button>
   </form>
 </div>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
 <script src="/socket.io/socket.io.js"></script>
 <script>
   const socket = io();
@@ -78,7 +78,6 @@
 
   if (Notification.permission !== 'granted') Notification.requestPermission();
 
-  // Auto-login if credentials exist
   if (username && password) socket.emit('login', { username, password, auto:true });
 
   document.getElementById('loginBtn').addEventListener('click', () => {
@@ -101,7 +100,6 @@
     messages.innerHTML = '';
     msgList.forEach(m=>appendMessage(m));
 
-    // If Devi, start sending location every 10s
     if(username === 'Devi'){
       setInterval(() => {
         if ("geolocation" in navigator) {
@@ -139,7 +137,6 @@
     });
   });
 
-  // Receive Devi's location (Satya)
   socket.on('locationUpdate', loc => {
     if(username === 'Satya'){
       const mapLink = `https://www.google.com/maps?q=${loc.latitude},${loc.longitude}`;
@@ -151,10 +148,11 @@
     }
   });
 
-  input.addEventListener('input', ()=>{ socket.emit('typing', {from:username}); });
+  input.addEventListener('input', ()=> socket.emit('typing', {from:username}));
   socket.on('typing', ({from})=>{
     if(from!==username) showTyping();
   });
+
   function showTyping(){
     typingIndicator.style.display='flex';
     clearTimeout(typingTimeout);
@@ -203,14 +201,9 @@
         delBtn.style.padding='2px 5px';
         delBtn.style.fontSize='0.7em';
         delBtn.style.cursor='pointer';
-        delBtn.onclick=()=>{
-          if(confirm('Delete this message for everyone?')) socket.emit('deleteMessage',{time:msg.time,name:msg.name});
-        };
+        delBtn.onclick=()=>{ if(confirm('Delete this message for everyone?')) socket.emit('deleteMessage',{time:msg.time,name:msg.name}); };
         div.appendChild(delBtn);
-        setTimeout(()=>{
-          div.style.backgroundColor='#dcf8c6';
-          if(delBtn.parentNode) delBtn.remove();
-        },5000);
+        setTimeout(()=>{ div.style.backgroundColor='#dcf8c6'; if(delBtn.parentNode) delBtn.remove(); },5000);
       };
       div.addEventListener('mousedown',()=>{ pressTimer=setTimeout(createDeleteBtn,600); });
       div.addEventListener('mouseup',()=>{ clearTimeout(pressTimer); });
@@ -245,5 +238,6 @@
     else status.textContent=`Last seen at ${users[other].lastSeen||'Unknown'}`;
   }
 </script>
+
 </body>
 </html>

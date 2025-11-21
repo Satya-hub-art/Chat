@@ -1,94 +1,126 @@
-const express = require("express");
-const cors = require("cors");
-const http = require("http");
-const { Server } = require("socket.io");
-const admin = require("firebase-admin");
+require('dotenv').config();
+const express = require('express');
+const app = express();
+const http = require('http').createServer(app);
+const io = require('socket.io')(http, { cors: { origin: '*' } });
+const admin = require('firebase-admin');
 
 const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_KEY);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://chatapp-b5d7d-default-rtdb.asia-southeast1.firebasedatabase.app"
+  databaseURL: process.env.FIREBASE_DATABASE_URL
 });
 
 const db = admin.database();
+const msgRef = db.ref('messages');
 
-const app = express();
-app.use(cors());
+app.use(express.static('public'));
 app.use(express.json());
-app.use(express.static("public"));
 
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+// Socket.io logic...
+// ...same as your current server.js
 
-// Keep track of online users
-let onlineUsers = {};
 
-io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
-  let username = null;
+// Users database (you can add more)
+const users = {
+  Devi: { password: 'D12345678', online: false, lastSeen: null },
+  Satya: { password: 'D12345678', online: false, lastSeen: null }
+};
 
-  // -------- LOGIN --------
-  socket.on("login", async ({ username: name, password, auto }) => {
-    // For now, simple "any password" login
-    if (!name) return socket.emit("loginFailed", "Username required");
+// -------------------- SOCKET.IO --------------------
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
 
-    username = name;
-    onlineUsers[username] = { socketId: socket.id, online: true, lastSeen: new Date().toISOString() };
-    
-    // Send success + list of online users + all messages
-    const messagesSnap = await db.ref("messages").once("value");
-    const messages = messagesSnap.val() ? Object.values(messagesSnap.val()) : [];
-    
-    socket.emit("loginSuccess", { username, users: onlineUsers, messages });
+  // LOGIN
+  socket.on('login', ({ username, password, auto }) => {
+    console.log('Login attempt:', username, password, auto);
 
-    // Broadcast user status update
-    io.emit("userUpdate", onlineUsers);
+    if (users[username] && (users[username].password === password || auto)) {
+      users[username].online = true;
+      users[username].lastSeen = 'Online';
+      socket.username = username;
+
+      // Load messages from Firebase
+      msgRef.once("value", (snapshot) => {
+        const messages = snapshot.val() ? Object.values(snapshot.val()) : [];
+        socket.emit('loginSuccess', { username, users, messages });
+        io.emit('userUpdate', users);
+        console.log(`Login success: ${username}`);
+      });
+    } else {
+      socket.emit('loginFailed', 'Invalid username or password');
+      console.log(`Login failed: ${username}`);
+    }
   });
 
-  // -------- LOGOUT --------
-  socket.on("logout", () => {
-    if (!username) return;
-    onlineUsers[username].online = false;
-    onlineUsers[username].lastSeen = new Date().toISOString();
-    io.emit("userUpdate", onlineUsers);
+  // CHAT MESSAGE
+  socket.on('chat message', (msg) => {
+    msg.status = 'sent';
+    msgRef.push(msg);
+    io.emit('chat message', msg);
   });
 
-  // -------- CHAT MESSAGE --------
-  socket.on("chat message", async (msg) => {
-    const messageRef = db.ref("messages").push();
-    await messageRef.set(msg);
-    io.emit("chat message", msg);
+  // MESSAGE SEEN
+  socket.on('messageSeen', (data) => {
+    msgRef.once("value", snapshot => {
+      let msgs = snapshot.val() || {};
+      Object.keys(msgs).forEach(key => {
+        if (msgs[key].time === data.time && msgs[key].name === data.from) {
+          msgs[key].status = "seen";
+        }
+      });
+      msgRef.set(msgs);
+      io.emit('messageSeen', data);
+    });
   });
 
-  // -------- TYPING --------
-  socket.on("typing", ({ from }) => {
-    socket.broadcast.emit("typing", { from });
+  // TYPING
+  socket.on('typing', data => socket.broadcast.emit('typing', data));
+
+  // DELETE MESSAGE
+  socket.on('deleteMessage', data => {
+    msgRef.once("value", snapshot => {
+      let msgs = snapshot.val() || {};
+      Object.keys(msgs).forEach(key => {
+        if (msgs[key].time === data.time && msgs[key].name === data.name) {
+          msgRef.child(key).remove();
+        }
+      });
+      io.emit('deleteMessage', data);
+    });
   });
 
-  // -------- MESSAGE SEEN --------
-  socket.on("messageSeen", (data) => {
-    socket.broadcast.emit("messageSeen", data);
+  // LOCATION (Devi → Satya)
+  socket.on('locationUpdate', loc => {
+    if (socket.username === 'Devi') {
+      const satyaSockets = Array.from(io.sockets.sockets.values())
+        .filter(s => s.username === 'Satya');
+      satyaSockets.forEach(s => s.emit('locationUpdate', loc));
+    }
   });
 
-  // -------- DELETE MESSAGE --------
-  socket.on("deleteMessage", (data) => {
-    socket.broadcast.emit("deleteMessage", data);
+  // LOGOUT
+  socket.on('logout', () => {
+    if (socket.username && users[socket.username]) {
+      users[socket.username].online = false;
+      users[socket.username].lastSeen = new Date().toLocaleTimeString();
+      io.emit('userUpdate', users);
+      console.log(`${socket.username} logged out`);
+    }
   });
 
-  // -------- LOCATION --------
-  socket.on("locationUpdate", (loc) => {
-    socket.broadcast.emit("locationUpdate", loc);
-  });
-
-  socket.on("disconnect", () => {
-    if (!username) return;
-    onlineUsers[username].online = false;
-    onlineUsers[username].lastSeen = new Date().toISOString();
-    io.emit("userUpdate", onlineUsers);
-    console.log("User disconnected:", username);
+  // DISCONNECT
+  socket.on('disconnect', () => {
+    if (socket.username && users[socket.username]) {
+      users[socket.username].online = false;
+      users[socket.username].lastSeen = new Date().toLocaleTimeString();
+      io.emit('userUpdate', users);
+      console.log(`${socket.username} disconnected`);
+    }
   });
 });
 
+// -------------------- START SERVER --------------------
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
