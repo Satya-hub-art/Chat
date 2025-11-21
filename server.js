@@ -6,16 +6,16 @@ const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const admin = require("firebase-admin");
+const path = require("path");
 
 // ---------------------------------------------------------
 // FIREBASE INIT
 // ---------------------------------------------------------
-
 const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_KEY);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://chatapp-b5d7d-default-rtdb.asia-southeast1.firebasedatabase.app"  // <-- Paste your URL
+  databaseURL: "https://chatapp-b5d7d-default-rtdb.asia-southeast1.firebasedatabase.app" // Your Firebase URL
 });
 
 const db = admin.database();
@@ -26,6 +26,14 @@ const db = admin.database();
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Serve static files from "public" folder
+app.use(express.static(path.join(__dirname, "public")));
+
+// Root route for testing
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html")); // Make sure public/index.html exists
+});
 
 const server = http.createServer(app);
 
@@ -48,7 +56,6 @@ io.on("connection", (socket) => {
   // -----------------------------------------------------
   socket.on("user_online", (uid) => {
     userId = uid;
-
     const ref = db.ref(`status/${userId}`);
 
     // Mark ONLINE
@@ -70,14 +77,6 @@ io.on("connection", (socket) => {
   // RECEIVE AND STORE MESSAGE
   // -----------------------------------------------------
   socket.on("send_message", async (msg) => {
-    /*
-      msg = {
-        from: "user1",
-        to: "user2",
-        text: "Hello"
-      }
-    */
-
     const newMsg = {
       ...msg,
       timestamp: admin.database.ServerValue.TIMESTAMP
@@ -97,7 +96,6 @@ io.on("connection", (socket) => {
 
     if (userId) {
       const ref = db.ref(`status/${userId}`);
-
       ref.set({
         state: "offline",
         last_changed: admin.database.ServerValue.TIMESTAMP
@@ -109,6 +107,7 @@ io.on("connection", (socket) => {
 // ---------------------------------------------------------
 // START SERVER
 // ---------------------------------------------------------
-server.listen(3000, () => {
-  console.log("Server running on port 3000");
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
